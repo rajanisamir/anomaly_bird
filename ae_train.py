@@ -10,7 +10,14 @@ from custom_audio_dataset import BirdAudioDataset
 
 from torch.utils.tensorboard import SummaryWriter
 
-AUDIO_FILE = "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210816_STUDY/20210816T063139-0500_Rec.wav"
+AUDIO_FILES = [
+    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210814_STUDY/20210814T063139-0500_Rec.wav",
+    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210814_STUDY/20210814T170000-0500_Rec.wav",
+    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210816_STUDY/20210816T063139-0500_Rec.wav",
+    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210816_STUDY/20210816T170000-0500_Rec.wav",
+    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210821_STUDY/20210821T063139-0500_Rec.wav",
+    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210821_STUDY/20210821T170000-0500_Rec.wav",
+]
 SAMPLE_RATE = 22050
 NUM_SAMPLES = 22050
 
@@ -25,8 +32,8 @@ def get_arguments():
     parser.add_argument(
         "--batch-size", type=int, default=256, help="Effective batch size"
     )
-    parser.add_argument("--lr", type=float, default=0.00001, help="Learning rate")
-    parser.add_argument("--wd", type=float, default=1e-5, help="Weight decay")
+    parser.add_argument("--lr", type=float, default=0.0001, help="Learning rate")
+    parser.add_argument("--wd", type=float, default=1e-7, help="Weight decay")
 
     # Checkpoints
     parser.add_argument(
@@ -85,10 +92,10 @@ def main(args):
     )
 
     bad = BirdAudioDataset(
-        AUDIO_FILE, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device
+        AUDIO_FILES, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device
     )
 
-    train_data_loader = DataLoader(bad, batch_size=args.batch_size)
+    train_data_loader = DataLoader(bad, batch_size=args.batch_size, shuffle=True)
 
     model = CNNAutoencoder()
     if torch.cuda.device_count() > 1:
@@ -108,7 +115,7 @@ def main(args):
     else:
         start_epoch = 0
 
-    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10"
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files6"
     writer = SummaryWriter(log_dir)
     print(f"Tensorboard logging at {log_dir}")
 
