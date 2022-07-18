@@ -13,43 +13,54 @@ class BirdAudioDataset(Dataset):
     # Note: crop_frequencies only works when transformation is set to a Mel spectrogram with 128 mels; in this case, it takes the highest 64 mels.
     def __init__(
         self,
-        audio_file,
+        audio_files,
         transformation,
         target_sample_rate,
         num_samples,
         device,
-        num_seconds=-1,
+        num_seconds=None,
         crop_frequencies=False,
     ):
+        # Set up instance attributes
         self.device = device
         self.transformation = transformation.to(self.device)
         self.target_sample_rate = target_sample_rate
         self.num_samples = num_samples
         self.crop_frequencies = crop_frequencies
 
-        # If num_seconds is set to -1, load the entire audio clip. Otherwise, load the requested number of seconds.
-        if num_seconds == -1:
-            signal, sr = torchaudio.load(audio_file)
-        else:
-            with wave.open(audio_file, "rb") as wave_file:
-                sample_rate = wave_file.getframerate()
-            print(f"Original sample rate of audio is {sample_rate} Hz")
-            print(f"Loading {num_seconds} seconds of audio...")
-            num_frames = num_seconds * sample_rate
-            signal, sr = torchaudio.load(audio_file, num_frames=num_frames)
+        # The num_seconds parameter may only be set to a non-None value if there is a single audio clip; in this case, it will load the requested number of seconds from this audio clip
+        assert len(audio_files) == 1 or num_seconds is None
 
-        signal = signal.to(self.device)
-        signal = self._resample_if_necessary(signal, sr)
-        signal = self._mix_down_if_necessary(signal)
-        self.signal, self.sr = signal, sr
+        self.signals = []
 
-        print("Audio loaded!\n")
+        for audio_file in audio_files:
+
+            # Load the appropriate section of audio
+            if num_seconds is None:
+                signal, sr = torchaudio.load(audio_file)
+            else:
+                with wave.open(audio_file, "rb") as wave_file:
+                    sample_rate = wave_file.getframerate()
+                print(f"Original sample rate of audio is {sample_rate} Hz")
+                print(f"Loading {num_seconds} seconds of audio...")
+                num_frames = num_seconds * sample_rate
+                signal, sr = torchaudio.load(audio_file, num_frames=num_frames)
+            
+            # Resample and mix down
+            signal = signal.to(self.device)
+            signal = self._resample_if_necessary(signal, sr)
+            signal = self._mix_down_if_necessary(signal)
+
+            self.signals.append(signal)
+
+        print(f"Loaded {len(audio_files)} audio file(s)")
 
     def __len__(self):
-        return math.ceil(self.signal.shape[1] / self.num_samples)
+        total_samples = sum([signal.shape[1] for signal in self.signals])
+        return math.ceil(total_samples / self.num_samples)
 
     def __getitem__(self, index):
-        signal = self._get_signal_at_index(self.signal, index)
+        signal = self._get_signal_at_index(index)
         signal = self._right_pad_if_necessary(signal)
         signal = self.transformation(signal)
         signal = self._crop_frequencies_if_necessary(signal)
@@ -73,8 +84,19 @@ class BirdAudioDataset(Dataset):
             signal = signal[:, 64:]
         return signal
 
-    def _get_signal_at_index(self, signal, index):
-        start_index = self.num_samples * index
+    def _get_signal_index_and_offset(self, start_sample):
+        curr_sample = 0
+        for (signal_index, signal) in enumerate(self.signals):
+            signal_samples = signal.shape[1]
+            if start_sample < curr_sample + signal_samples:
+                signal_offset = start_sample - curr_sample
+                return signal_index, signal_offset
+            curr_sample += signal_samples
+
+    def _get_signal_at_index(self, index):
+        start_sample = self.num_samples * index
+        signal_index, start_index = self._get_signal_index_and_offset(start_sample)
+        signal = self.signals[signal_index]
         end_index = start_index + self.num_samples
         return signal[:, start_index:end_index]
 
@@ -86,19 +108,11 @@ class BirdAudioDataset(Dataset):
             signal = torch.nn.functional.pad(signal, last_dim_padding)
         return signal
 
-    def _get_audio_sample_path(self, index):
-        fold = f"fold{self.annotations.iloc[index, 5]}"
-        path = os.path.join(self.audio_dir, fold, self.annotations.iloc[index, 0])
-        return path
-
-    def _get_audio_sample_label(self, index):
-        return self.annotations.iloc[index, 6]
-
 
 if __name__ == "__main__":
 
-    # AUDIO_FILE = "/grand/projects/BirdAudio/Morton_Arboretum/audio/set1/00023734/20210628_STUDY/20210628T234550-0500_Rec.wav"
-    AUDIO_FILE = "20210816T063139-0500_Rec.wav"
+    AUDIO_FILES = ["/grand/projects/BirdAudio/Morton_Arboretum/audio/set1/00023734/20210628_STUDY/20210628T234550-0500_Rec.wav", "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210816_STUDY/20210816T063139-0500_Rec.wav"]
+    # AUDIO_FILES = ["20210816T063139-0500_Rec.wav"]
     SAMPLE_RATE = 22050
     NUM_SAMPLES = 22050
 
@@ -107,16 +121,14 @@ if __name__ == "__main__":
     else:
         device = "cpu"
 
-    print(f"Using {device} device\n")
+    print(f"Using {device} device")
 
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
         sample_rate=SAMPLE_RATE, n_fft=1024, hop_length=512, n_mels=64
     )
 
-    bad = BirdAudioDataset(
-        AUDIO_FILE, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device, 10, True
-    )
+    bad = BirdAudioDataset(AUDIO_FILES, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device)
 
     print(f"There are {len(bad)} samples in the dataset")
-    print(f"The shape of the first sample is {bad[0].shape}")
-    print(f"The shape of the last sample is {bad[len(bad) - 1].shape}")
+    print(f"The shape of the first sample is {bad[0][0].shape}")
+    print(f"The shape of the last sample is {bad[len(bad) - 1][0].shape}")

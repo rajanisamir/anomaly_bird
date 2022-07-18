@@ -56,10 +56,10 @@ class CNNAutoencoder(nn.Module):
         self.maxunpool = nn.MaxUnpool2d(kernel_size=2)
 
         self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(128 * 5 * 4, 2)
+        self.linear1 = nn.Linear(128 * 5 * 4, 10)
         self.softmax = nn.Softmax(dim=1)
 
-        self.linear2 = nn.Linear(2, 128 * 5 * 4)
+        self.linear2 = nn.Linear(10, 128 * 5 * 4)
         self.unflatten = nn.Unflatten(1, (128, 5, 4))
 
         self.relu = nn.ReLU()

@@ -48,7 +48,7 @@ def get_arguments():
 def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer):
     for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
         inputs = inputs.to(device)
-        recons = model(inputs)
+        recons, _ = model(inputs)
         loss = loss_fn(recons, inputs)
         optimizer.zero_grad()
         loss.backward()
@@ -63,15 +63,15 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, write
 
 
 def train(model, data_loader, loss_fn, optimizer, device, epochs, start_epoch, writer):
-    for epoch in range(start_epoch, args.epochs):
-        print(f"Epoch {epoch+1}")
+    for epoch in range(start_epoch, epochs):
+        print(f"Epoch {epoch+1}/{epochs}", end='\r')
         train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer)
-        print("---------------")
     print("Training is done.")
     torch.save(model.state_dict(), args.exp_dir / "conv_autoencoder.pth")
 
 
 def main(args):
+
     if torch.cuda.is_available():
         device = "cuda"
     else:
@@ -108,10 +108,9 @@ def main(args):
     else:
         start_epoch = 0
 
-    start_epoch = 0
-    writer = SummaryWriter(
-        f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}"
-    )
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10"
+    writer = SummaryWriter(log_dir)
+    print(f"Tensorboard logging at {log_dir}")
 
     train(
         model,
