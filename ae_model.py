@@ -106,6 +106,8 @@ class CNNAutoencoder(nn.Module):
         out = self.linear1(out)
         out = self.softmax(out)
 
+        embedding = out
+
         # Decode
         out = self.linear2(out)
         out = self.unflatten(out)
@@ -123,7 +125,7 @@ class CNNAutoencoder(nn.Module):
             self.relu(self.maxunpool(out, indices=indices1, output_size=size1))
         )
 
-        return out
+        return out, embedding
 
 
 if __name__ == "__main__":

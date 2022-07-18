@@ -53,7 +53,7 @@ class BirdAudioDataset(Dataset):
         signal = self._right_pad_if_necessary(signal)
         signal = self.transformation(signal)
         signal = self._crop_frequencies_if_necessary(signal)
-        return signal
+        return (signal, index)
 
     def _resample_if_necessary(self, signal, sr):
         if sr != self.target_sample_rate:

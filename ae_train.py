@@ -46,7 +46,7 @@ def get_arguments():
 
 
 def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer):
-    for i, inputs in enumerate(data_loader, start=epoch * len(data_loader)):
+    for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
         inputs = inputs.to(device)
         recons = model(inputs)
         loss = loss_fn(recons, inputs)
