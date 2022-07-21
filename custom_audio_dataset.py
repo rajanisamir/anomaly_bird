@@ -10,7 +10,7 @@ import wave
 
 
 class BirdAudioDataset(Dataset):
-    # Note: crop_frequencies only works when transformation is set to a Mel spectrogram with 128 mels; in this case, it takes the highest 64 mels.
+    # Note: crop_frequencies only works when transformation is set to a Mel spectrogram with 128 mels; in this case, it takes the highest 64 mels. tight_crop only works when crop_frequencies is also set to True and the transformation is set to a Mel spectrogram with 256 mels.
     def __init__(
         self,
         audio_files,
@@ -20,6 +20,7 @@ class BirdAudioDataset(Dataset):
         device,
         num_seconds=None,
         crop_frequencies=False,
+        tight_crop=False
     ):
         # Set up instance attributes
         self.device = device
@@ -81,7 +82,10 @@ class BirdAudioDataset(Dataset):
 
     def _crop_frequencies_if_necessary(self, signal):
         if self.crop_frequencies:
-            signal = signal[:, 64:]
+            if self.tight_crop:
+                signal = signal[:, 64:128]
+            else:
+                signal = signal[:, 64:]
         return signal
 
     def _get_signal_index_and_offset(self, start_sample):

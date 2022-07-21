@@ -22,6 +22,7 @@ SAMPLE_RATE = 22050
 NUM_SAMPLES = 22050
 
 CROPPED_MODE = True
+TIGHT_CROP_MODE = True
 
 def get_arguments():
     parser = argparse.ArgumentParser(
@@ -89,11 +90,11 @@ def main(args):
     args.exp_dir.mkdir(parents=True, exist_ok=True)
 
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-        sample_rate=SAMPLE_RATE, n_fft=1024, hop_length=512, n_mels=(128 if CROPPED_MODE else 64)
+        sample_rate=SAMPLE_RATE, n_fft=1024, hop_length=512, n_mels=((256 if TIGHT_CROP_MODE else 128) if CROPPED_MODE else 64)
     )
 
     bad = BirdAudioDataset(
-        AUDIO_FILES, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device, crop_frequencies=CROPPED_MODE
+        AUDIO_FILES, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device, crop_frequencies=CROPPED_MODE, tight_crop=TIGHT_CROP_MODE
     )
 
     train_data_loader = DataLoader(bad, batch_size=args.batch_size, shuffle=True)
@@ -116,7 +117,7 @@ def main(args):
     else:
         start_epoch = 0
 
-    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files6_cropped"
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files6_tight"
     writer = SummaryWriter(log_dir)
     print(f"Tensorboard logging at {log_dir}")
 
