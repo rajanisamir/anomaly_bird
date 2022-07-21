@@ -19,7 +19,7 @@ AUDIO_FILES = [
     "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210821_STUDY/20210821T170000-0500_Rec.wav",
 ]
 SAMPLE_RATE = 22050
-NUM_SAMPLES = 22050
+NUM_SAMPLES = 22050 // 5
 
 CROPPED_MODE = True
 TIGHT_CROP_MODE = True
@@ -102,7 +102,7 @@ def main(args):
     model = CNNAutoencoder()
     if torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs")
-        model = nn.DataParallel(model)
+    model = nn.DataParallel(model)
     model = model.to(device=device)
 
     loss_fn = nn.MSELoss()

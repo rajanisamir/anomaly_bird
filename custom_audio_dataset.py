@@ -28,6 +28,7 @@ class BirdAudioDataset(Dataset):
         self.target_sample_rate = target_sample_rate
         self.num_samples = num_samples
         self.crop_frequencies = crop_frequencies
+        self.tight_crop = tight_crop
 
         # The num_seconds parameter may only be set to a non-None value if there is a single audio clip; in this case, it will load the requested number of seconds from this audio clip
         assert len(audio_files) == 1 or num_seconds is None
@@ -83,7 +84,7 @@ class BirdAudioDataset(Dataset):
     def _crop_frequencies_if_necessary(self, signal):
         if self.crop_frequencies:
             if self.tight_crop:
-                signal = signal[:, 64:128]
+                signal = signal[:, 128:192]
             else:
                 signal = signal[:, 64:]
         return signal
