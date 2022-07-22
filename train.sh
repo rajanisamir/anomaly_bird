@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #COBALT -q full-node
-#COBALT -t 180
+#COBALT -t 300
 #COBALT -n 1
 #COBALT -A BirdAudio
 

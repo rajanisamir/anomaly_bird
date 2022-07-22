@@ -1,28 +1,16 @@
 import torch
 from pathlib import Path
+import os
 import argparse
 from torch import nn
 from torch.utils.data import DataLoader
 import torchaudio
+from ae_settings import *
 from ae_model import CNNAutoencoder
 
 from custom_audio_dataset import BirdAudioDataset
 
 from torch.utils.tensorboard import SummaryWriter
-
-AUDIO_FILES = [
-    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210814_STUDY/20210814T063139-0500_Rec.wav",
-    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210814_STUDY/20210814T170000-0500_Rec.wav",
-    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210816_STUDY/20210816T063139-0500_Rec.wav",
-    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210816_STUDY/20210816T170000-0500_Rec.wav",
-    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210821_STUDY/20210821T063139-0500_Rec.wav",
-    "/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879/20210821_STUDY/20210821T170000-0500_Rec.wav",
-]
-SAMPLE_RATE = 22050
-NUM_SAMPLES = 22050 // 5
-
-CROPPED_MODE = True
-TIGHT_CROP_MODE = True
 
 def get_arguments():
     parser = argparse.ArgumentParser(
@@ -47,12 +35,23 @@ def get_arguments():
     parser.add_argument(
         "--resume",
         type=bool,
-        default=False,
+        default=True,
         help="Whether or not to resume from a checkpoint",
     )
 
     return parser
 
+def get_all_audio_files(audio_path, audio_file_cap):
+    audio_files = []
+    for root, dirs, files in os.walk(audio_path, topdown=False):
+        for name in files:
+            extension = os.path.splitext(name)[1]
+            if extension == ".wav":
+                audio_file = os.path.join(root, name)
+                audio_files.append(audio_file)
+                if len(audio_files) >= audio_file_cap:
+                    return audio_files
+    return audio_files
 
 def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer):
     for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
@@ -93,8 +92,11 @@ def main(args):
         sample_rate=SAMPLE_RATE, n_fft=1024, hop_length=512, n_mels=((256 if TIGHT_CROP_MODE else 128) if CROPPED_MODE else 64)
     )
 
+    audio_files = get_all_audio_files(AUDIO_PATH, AUDIO_FILE_CAP)
+    print(f"Using {len(audio_files)} audio files!")
+
     bad = BirdAudioDataset(
-        AUDIO_FILES, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device, crop_frequencies=CROPPED_MODE, tight_crop=TIGHT_CROP_MODE
+        audio_files, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, device, crop_frequencies=CROPPED_MODE, tight_crop=TIGHT_CROP_MODE
     )
 
     train_data_loader = DataLoader(bad, batch_size=args.batch_size, shuffle=True)
@@ -117,7 +119,7 @@ def main(args):
     else:
         start_epoch = 0
 
-    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files6_tight"
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_filesmany_tight"
     writer = SummaryWriter(log_dir)
     print(f"Tensorboard logging at {log_dir}")
 
