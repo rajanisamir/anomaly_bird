@@ -24,7 +24,7 @@ class BirdAudioDataset(Dataset):
     ):
         # Set up instance attributes
         self.device = device
-        self.transformation = transformation.to(self.device)
+        self.transformation = transformation
         self.target_sample_rate = target_sample_rate
         self.num_samples = num_samples
         self.crop_frequencies = crop_frequencies
@@ -49,7 +49,6 @@ class BirdAudioDataset(Dataset):
                 signal, sr = torchaudio.load(audio_file, num_frames=num_frames)
             
             # Resample and mix down
-            signal = signal.to(self.device)
             signal = self._resample_if_necessary(signal, sr)
             signal = self._mix_down_if_necessary(signal)
 
@@ -70,9 +69,7 @@ class BirdAudioDataset(Dataset):
 
     def _resample_if_necessary(self, signal, sr):
         if sr != self.target_sample_rate:
-            resampler = torchaudio.transforms.Resample(sr, self.target_sample_rate).to(
-                device=self.device
-            )
+            resampler = torchaudio.transforms.Resample(sr, self.target_sample_rate)
             signal = resampler(signal)
         return signal
 
