@@ -4,6 +4,7 @@ import os
 import argparse
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.distributed import all_gather
 import torchaudio
 from ae_settings import *
 from ae_model import CNNAutoencoder
@@ -13,7 +14,8 @@ from custom_audio_dataset import BirdAudioDataset
 
 from torch.utils.tensorboard import SummaryWriter
 
-import warnings
+import scipy.stats as stats
+
 
 def get_arguments():
     parser = argparse.ArgumentParser(
@@ -41,21 +43,24 @@ def get_arguments():
         default=True,
         help="Whether or not to resume from a checkpoint",
     )
-    
+
     # Running
     parser.add_argument("--num-workers", type=int, default=1)
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
+    parser.add_argument(
+        "--device", default="cuda", help="device to use for training / testing"
+    )
 
     # Distributed
-    parser.add_argument('--world-size', default=1, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist-url', default='env://',
-                        help='url used to set up distributed training')
-
+    parser.add_argument(
+        "--world-size", default=1, type=int, help="number of distributed processes"
+    )
+    parser.add_argument("--local_rank", default=-1, type=int)
+    parser.add_argument(
+        "--dist-url", default="env://", help="url used to set up distributed training"
+    )
 
     return parser
+
 
 def get_all_audio_files(audio_path, audio_file_cap):
     audio_files = []
@@ -69,16 +74,15 @@ def get_all_audio_files(audio_path, audio_file_cap):
                     return audio_files
     return audio_files
 
+
 def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu):
     for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
         inputs = inputs.cuda(gpu, non_blocking=True)
         recons, _ = model(inputs)
         loss = loss_fn(recons, inputs)
         optimizer.zero_grad()
-        # if loss < 30:
         loss.backward()
         optimizer.step()
-        #     writer.add_scalar("Loss < 30", loss.item(), i)
         writer.add_scalar("Loss", loss.item(), i)
     if args.rank == 0:
         state = dict(
@@ -89,13 +93,60 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, write
         torch.save(state, args.exp_dir / "model.pth")
 
 
-def train(model, data_loader, loss_fn, optimizer, device, epochs, start_epoch, writer, gpu):
+def train(
+    model,
+    data_loader,
+    prune_data_loader,
+    loss_fn,
+    optimizer,
+    device,
+    epochs,
+    start_epoch,
+    writer,
+    gpu,
+):
     for epoch in range(start_epoch, epochs):
-        print(f"Epoch {epoch+1}/{epochs}", end='\r')
-        train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu)
+        print(f"Epoch {epoch+1}/{epochs}", end="\r")
+        train_one_epoch(
+            model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu
+        )
+        if epochs % PRUNE_FREQUENCY == 0:
+            print("Pruning anomalies!")
+            bad = prune_anomalies(model, prune_data_loader, loss_fn, gpu)
+            data_loader, prune_data_loader = get_data_loaders(bad)
     print("Training is done.")
     if args.rank == 0:
         torch.save(model.state_dict(), args.exp_dir / "conv_autoencoder.pth")
+
+
+def prune_anomalies(model, loss_fn, prune_data_loader, gpu):
+    indices = []
+    losses = []
+
+    for i, (inputs, index) in enumerate(prune_data_loader):
+        inputs = inputs.cuda(gpu, non_blocking=True)
+        recons, _ = model(inputs)
+        loss = loss_fn(recons, inputs)
+        losses.append((index, loss))
+
+    all_indices = [
+        torch.zeros(1, dtype=torch.int32) for _ in range(len(prune_data_loader))
+    ]
+    all_losses = [
+        torch.zeros(1, dtype=torch.float32) for _ in range(len(prune_data_loader))
+    ]
+    all_gather(all_indices, indices)
+    all_gather(all_losses, losses)
+
+    all_z_scores = stats.zscore(all_losses)
+
+    normal_indices = all_indices[all_z_scores < 3]
+
+    print(f"Pruned {len(normal_indices) - len(all_indices)} samples...")
+
+    bad = torch.utils.data.Subset(bad, normal_indices)
+
+    return bad
 
 
 def main(args):
@@ -110,20 +161,26 @@ def main(args):
         args.exp_dir.mkdir(parents=True, exist_ok=True)
 
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-        sample_rate=SAMPLE_RATE, n_fft=1024, hop_length=512, n_mels=((256 if TIGHT_CROP_MODE else 128) if CROPPED_MODE else 64)
+        sample_rate=SAMPLE_RATE,
+        n_fft=1024,
+        hop_length=512,
+        n_mels=((256 if TIGHT_CROP_MODE else 128) if CROPPED_MODE else 64),
     )
 
     audio_files = get_all_audio_files(AUDIO_PATH, AUDIO_FILE_CAP)
     print(f"Using {len(audio_files)} audio files!")
 
     bad = BirdAudioDataset(
-        audio_files, mel_spectrogram, SAMPLE_RATE, NUM_SAMPLES, gpu, crop_frequencies=CROPPED_MODE, tight_crop=TIGHT_CROP_MODE
+        audio_files,
+        mel_spectrogram,
+        SAMPLE_RATE,
+        NUM_SAMPLES,
+        gpu,
+        crop_frequencies=CROPPED_MODE,
+        tight_crop=TIGHT_CROP_MODE,
     )
-    sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=True)
 
-    assert args.batch_size % args.world_size == 0
-    per_device_batch_size = args.batch_size // args.world_size
-    train_data_loader = DataLoader(bad, batch_size=per_device_batch_size, num_workers=args.num_workers, pin_memory=False, sampler=sampler)
+    train_data_loader, prune_data_loader = get_data_loaders()
 
     model = CNNAutoencoder().cuda(gpu)
     if torch.cuda.device_count() > 1:
@@ -149,15 +206,40 @@ def main(args):
 
     train(
         model,
+        bad,
         train_data_loader,
+        prune_data_loader,
         loss_fn,
         optimizer,
         args.device,
         args.epochs,
         start_epoch,
         writer,
-        gpu
+        gpu,
     )
+
+
+def get_data_loaders(bad):
+    assert args.batch_size % args.world_size == 0
+    per_device_batch_size = args.batch_size // args.world_size
+
+    sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=True)
+
+    train_data_loader = DataLoader(
+        bad,
+        batch_size=per_device_batch_size,
+        num_workers=args.num_workers,
+        pin_memory=False,
+        sampler=sampler,
+    )
+    prune_data_loader = DataLoader(
+        bad,
+        batch_size=1,
+        num_workers=args.num_workers,
+        pin_memory=False,
+    )
+
+    return train_data_loader, prune_data_loader
 
 
 if __name__ == "__main__":
