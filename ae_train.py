@@ -76,6 +76,7 @@ def get_all_audio_files(audio_path, audio_file_cap):
 
 
 def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu):
+    print(f"Length of dataloader dataset: {len(data_loader.dataset)}")
     for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
         inputs = inputs.cuda(gpu, non_blocking=True)
         recons, _ = model(inputs)
@@ -95,6 +96,7 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, write
 
 def train(
     model,
+    bad,
     data_loader,
     prune_data_loader,
     loss_fn,
@@ -106,43 +108,53 @@ def train(
     gpu,
 ):
     for epoch in range(start_epoch, epochs):
-        print(f"Epoch {epoch+1}/{epochs}", end="\r")
+        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"Length of dataset: {len(bad)}")
         train_one_epoch(
             model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu
         )
-        if epochs % PRUNE_FREQUENCY == 0:
+        if PRUNE_ANOMALIES and epoch % PRUNE_FREQUENCY == 0:
             print("Pruning anomalies!")
-            bad = prune_anomalies(model, prune_data_loader, loss_fn, gpu)
+            bad = prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu)
             data_loader, prune_data_loader = get_data_loaders(bad)
     print("Training is done.")
     if args.rank == 0:
         torch.save(model.state_dict(), args.exp_dir / "conv_autoencoder.pth")
 
 
-def prune_anomalies(model, loss_fn, prune_data_loader, gpu):
+def prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu):
     indices = []
     losses = []
 
-    for i, (inputs, index) in enumerate(prune_data_loader):
+    for i, (inputs, _) in enumerate(prune_data_loader):
         inputs = inputs.cuda(gpu, non_blocking=True)
         recons, _ = model(inputs)
         loss = loss_fn(recons, inputs)
-        losses.append((index, loss))
+        indices.append(i)
+        losses.append(loss)
+
+    indices = torch.tensor(indices, dtype=torch.int32).cuda(gpu, non_blocking=True)
+    losses = torch.tensor(losses, dtype=torch.float32).cuda(gpu, non_blocking=True)
+
 
     all_indices = [
-        torch.zeros(1, dtype=torch.int32) for _ in range(len(prune_data_loader))
+        torch.zeros(len(prune_data_loader), dtype=torch.int32).cuda(gpu, non_blocking=True) for _ in range(8)
     ]
     all_losses = [
-        torch.zeros(1, dtype=torch.float32) for _ in range(len(prune_data_loader))
+        torch.zeros(len(prune_data_loader), dtype=torch.float32).cuda(gpu, non_blocking=True) for _ in range(8)
     ]
+
     all_gather(all_indices, indices)
     all_gather(all_losses, losses)
+
+    all_indices = torch.cat(all_indices).detach().cpu().numpy()
+    all_losses = torch.cat(all_losses).detach().cpu().numpy()
 
     all_z_scores = stats.zscore(all_losses)
 
     normal_indices = all_indices[all_z_scores < 3]
 
-    print(f"Pruned {len(normal_indices) - len(all_indices)} samples...")
+    print(f"Pruned {len(all_indices) - len(normal_indices)} samples...")
 
     bad = torch.utils.data.Subset(bad, normal_indices)
 
@@ -150,8 +162,6 @@ def prune_anomalies(model, loss_fn, prune_data_loader, gpu):
 
 
 def main(args):
-    warnings.filterwarnings("ignore")
-
     torch.backends.cudnn.benchmark = True
     init_distributed_mode(args)
     print(args)
@@ -180,7 +190,7 @@ def main(args):
         tight_crop=TIGHT_CROP_MODE,
     )
 
-    train_data_loader, prune_data_loader = get_data_loaders()
+    train_data_loader, prune_data_loader = get_data_loaders(bad)
 
     model = CNNAutoencoder().cuda(gpu)
     if torch.cuda.device_count() > 1:
@@ -200,7 +210,7 @@ def main(args):
     else:
         start_epoch = 0
 
-    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_filesmany_tight"
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files{AUDIO_FILE_CAP}_{'tight' if TIGHT_CROP_MODE else 'std'}_{'prune' if PRUNE_ANOMALIES else 'noprune'}"
     writer = SummaryWriter(log_dir)
     print(f"Tensorboard logging at {log_dir}")
 
@@ -223,20 +233,22 @@ def get_data_loaders(bad):
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
 
-    sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=True)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=True)
+    prune_sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=False)
 
     train_data_loader = DataLoader(
         bad,
         batch_size=per_device_batch_size,
         num_workers=args.num_workers,
         pin_memory=False,
-        sampler=sampler,
+        sampler=train_sampler,
     )
     prune_data_loader = DataLoader(
         bad,
         batch_size=1,
         num_workers=args.num_workers,
         pin_memory=False,
+        sampler=prune_sampler
     )
 
     return train_data_loader, prune_data_loader
