@@ -13,3 +13,19 @@ The purpose of this repository is to detect anomalies in a set of audio files re
 - `custom_audio_dataset.py` creates a PyTorch Dataset based on a list of audio files by preprocessing the data (e.g. mixing it down to one channel, cropping the spectrograms, etc.). The code in this file was originally adapted from Valerio Velarado's [excellent video series](https://www.youtube.com/watch?v=gp2wZqDoJ1Y&list=PL-wATfeyAMNoirN4idjev6aRu8ISZYVWm) of processing audio data on PyTorch, with several features added by me.
 - `distributed.py` was taken from the repository for [VICReg](https://github.com/facebookresearch/vicreg), which contains a PyTorch implementation of a novel self-supervised learning technique. It contains functions that help set up distributed parallel training.
 - `train.sh` is a basic bash script used to submit a training run to ThetaGPU at ALCF.
+
+## Usage
+You can run the code on a node with 8 GPUs by invoking:
+
+`python -m torch.distributed.launch --nproc_per_node 8 ae_train.py [--epochs EPOCHS] [--batch-size BATCH_SIZE] [--lr LR] [--wd WD]
+[--exp-dir EXP_DIR] [--resume RESUME] [--num-workers NUM_WORKERS] [--device DEVICE] [--world-size WORLD_SIZE] [--local_rank LOCAL_RANK]
+[--dist-url DIST_URL]`
+
+Arguments in brackets are optional and have reasonable default values assigned. Additional settings are currently located in `ae_settings.py` and can be configured as desired; these parameters will be changed to command line arguments in a future version. Below is a summary of each of these parameters and their meanings:
+- `AUDIO_PATH`: the path to the directory in which the code will search for `.wav` files (subdirectories are included in the search)
+- `AUDIO_FILE_CAP`: the maximum number of audio files for which the code will look
+- `SAMPLE_RATE`: the sample rate that all audio files will be resampled to
+- `NUM_SAMPLES`: the number of audio samples in a single training sample; if `NUM_SAMPLES` is equal to `SAMPLE_RATE`, each training sample will consist of one second of audio
+- `CROPPED_MODE`: enabling `CROPPED_MODE` will generate spectrograms with 128 mels and crop them to take only mels 65-128
+- `TIGHT_CROP_MODE`: should be set to True only if `CROPPED_MODE` is set to True; will generate Mel spectrograms with 256 mels and crop them to take only Mels 129-192
+- `PRUNE_ANOMALIES`, `PRUNE_FREQUENCY`: if `PRUNE_ANOMALIES` is True, will remove anomalies (samples with the highest reconstruction errors) every `PRUNE_FREQUENCY` epochs
