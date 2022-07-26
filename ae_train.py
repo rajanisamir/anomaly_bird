@@ -209,7 +209,7 @@ def main(args):
     else:
         start_epoch = 0
 
-    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files{AUDIO_FILE_CAP}_{'tight' if TIGHT_CROP_MODE else 'std'}_{'prune' if PRUNE_ANOMALIES else 'noprune'}"
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files{AUDIO_FILE_CAP}_{'tight' if TIGHT_CROP_MODE else 'std'}_{'prune' if PRUNE_ANOMALIES else 'noprune'}_epochs{args.epochs}"
     writer = SummaryWriter(log_dir)
     print(f"Tensorboard logging at {log_dir}")
 
