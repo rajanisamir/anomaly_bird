@@ -1,4 +1,4 @@
-# TAKEN FROM VICREG REPOSITORY!
+# Copy-paste from VICReg repository
 
 import torch
 import os

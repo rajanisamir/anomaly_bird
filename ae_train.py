@@ -5,12 +5,14 @@ import argparse
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather
+from torch.distributed import get_world_size
 import torchaudio
 from ae_settings import *
 from ae_model import CNNAutoencoder
 from distributed import init_distributed_mode
 
 from custom_audio_dataset import BirdAudioDataset
+from ae_custom_distributed_sampler import CustomDistributedSampler
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -76,7 +78,6 @@ def get_all_audio_files(audio_path, audio_file_cap):
 
 
 def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu):
-    print(f"Length of dataloader dataset: {len(data_loader.dataset)}")
     for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
         inputs = inputs.cuda(gpu, non_blocking=True)
         recons, _ = model(inputs)
@@ -108,15 +109,14 @@ def train(
     gpu,
 ):
     for epoch in range(start_epoch, epochs):
-        print(f"Epoch {epoch+1}/{epochs}")
-        print(f"Length of dataset: {len(bad)}")
+        print(f"Epoch {epoch + 1}/{epochs}")
+        if PRUNE_ANOMALIES and (epoch + 1) % PRUNE_FREQUENCY == 0:
+            print("Pruning anomalies!")
+            normal_indices = prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu)
+            data_loader, prune_data_loader = get_data_loaders(bad, normal_indices)
         train_one_epoch(
             model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu
         )
-        if PRUNE_ANOMALIES and epoch % PRUNE_FREQUENCY == 0:
-            print("Pruning anomalies!")
-            bad = prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu)
-            data_loader, prune_data_loader = get_data_loaders(bad)
     print("Training is done.")
     if args.rank == 0:
         torch.save(model.state_dict(), args.exp_dir / "conv_autoencoder.pth")
@@ -125,23 +125,24 @@ def train(
 def prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu):
     indices = []
     losses = []
-
-    for i, (inputs, _) in enumerate(prune_data_loader):
-        inputs = inputs.cuda(gpu, non_blocking=True)
-        recons, _ = model(inputs)
-        loss = loss_fn(recons, inputs)
-        indices.append(i)
-        losses.append(loss)
+    
+    with torch.no_grad():
+        for i, (inputs, _) in enumerate(prune_data_loader):
+            inputs = inputs.cuda(gpu, non_blocking=True)
+            recons, _ = model(inputs)
+            loss = loss_fn(recons, inputs)
+            indices.append(i)
+            losses.append(loss)
 
     indices = torch.tensor(indices, dtype=torch.int32).cuda(gpu, non_blocking=True)
     losses = torch.tensor(losses, dtype=torch.float32).cuda(gpu, non_blocking=True)
 
 
     all_indices = [
-        torch.zeros(len(prune_data_loader), dtype=torch.int32).cuda(gpu, non_blocking=True) for _ in range(8)
+        torch.zeros(len(prune_data_loader), dtype=torch.int32).cuda(gpu, non_blocking=True) for _ in range(get_world_size())
     ]
     all_losses = [
-        torch.zeros(len(prune_data_loader), dtype=torch.float32).cuda(gpu, non_blocking=True) for _ in range(8)
+        torch.zeros(len(prune_data_loader), dtype=torch.float32).cuda(gpu, non_blocking=True) for _ in range(get_world_size())
     ]
 
     all_gather(all_indices, indices)
@@ -156,9 +157,7 @@ def prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu):
 
     print(f"Pruned {len(all_indices) - len(normal_indices)} samples...")
 
-    bad = torch.utils.data.Subset(bad, normal_indices)
-
-    return bad
+    return normal_indices
 
 
 def main(args):
@@ -178,7 +177,7 @@ def main(args):
     )
 
     audio_files = get_all_audio_files(AUDIO_PATH, AUDIO_FILE_CAP)
-    print(f"Using {len(audio_files)} audio files!")
+    print(f"Using {len(audio_files)} audio file(s)")
 
     bad = BirdAudioDataset(
         audio_files,
@@ -190,7 +189,7 @@ def main(args):
         tight_crop=TIGHT_CROP_MODE,
     )
 
-    train_data_loader, prune_data_loader = get_data_loaders(bad)
+    train_data_loader, prune_data_loader = get_data_loaders(bad, range(len(bad)))
 
     model = CNNAutoencoder().cuda(gpu)
     if torch.cuda.device_count() > 1:
@@ -229,26 +228,26 @@ def main(args):
     )
 
 
-def get_data_loaders(bad):
+def get_data_loaders(bad, normal_indices):
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=True)
-    prune_sampler = torch.utils.data.distributed.DistributedSampler(bad, shuffle=False)
+    sampler = CustomDistributedSampler(bad, normal_indices)
+    print("Number of samples: ", sampler.total_size)
 
     train_data_loader = DataLoader(
         bad,
         batch_size=per_device_batch_size,
         num_workers=args.num_workers,
         pin_memory=False,
-        sampler=train_sampler,
+        sampler=sampler,
     )
     prune_data_loader = DataLoader(
         bad,
         batch_size=1,
         num_workers=args.num_workers,
         pin_memory=False,
-        sampler=prune_sampler
+        sampler=sampler
     )
 
     return train_data_loader, prune_data_loader
