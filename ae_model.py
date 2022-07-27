@@ -2,7 +2,7 @@ from torch import nn
 
 
 class CNNAutoencoder(nn.Module):
-    def __init__(self):
+    def __init__(self, bottleneck_dim=10):
         super().__init__()
         self.conv1 = nn.Conv2d(
             in_channels=1, out_channels=16, kernel_size=3, stride=1, padding=2
@@ -57,36 +57,16 @@ class CNNAutoencoder(nn.Module):
     
         self.flatten = nn.Flatten()
 
-        self.linear1 = nn.Linear(128 * 5 * 4, 10)
+        self.linear1 = nn.Linear(128 * 5 * 4, bottleneck_dim)
         # self.linear1 = nn.Linear(128 * 5 * 2, 10)
         self.softmax = nn.Softmax(dim=1)
 
         # self.linear2 = nn.Linear(10, 128 * 5 * 2)
-        self.linear2 = nn.Linear(10, 128 * 5 * 4)
+        self.linear2 = nn.Linear(bottleneck_dim, 128 * 5 * 4)
         self.unflatten = nn.Unflatten(1, (128, 5, 4))
         # self.unflatten = nn.Unflatten(1, (128, 5, 2))
 
         self.relu = nn.ReLU()
-
-        # self.encoder = nn.Sequential(
-        #     self.conv1,
-        #     self.conv2,
-        #     self.conv3,
-        #     self.conv4,
-        #     self.flatten,
-        #     self.linear1,
-        #     self.softmax,
-        # )
-
-        # self.decoder = nn.Sequential(
-        #     self.linear2,
-        #     self.unflatten,
-        #     self.conv1T,
-        #     self.conv2T,
-        #     self.conv3T,
-        #     self.conv4T,
-        #     self.softmax,
-        # )
 
     def forward(self, input_data):
         # Encode

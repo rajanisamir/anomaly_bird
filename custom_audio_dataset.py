@@ -19,16 +19,14 @@ class BirdAudioDataset(Dataset):
         num_samples,
         device,
         num_seconds=None,
-        crop_frequencies=False,
-        tight_crop=False
+        crop_mode="third_quarter"
     ):
         # Set up instance attributes
         self.device = device
         self.transformation = transformation
         self.target_sample_rate = target_sample_rate
         self.num_samples = num_samples
-        self.crop_frequencies = crop_frequencies
-        self.tight_crop = tight_crop
+        self.crop_mode="third_quarter"
 
         # The num_seconds parameter may only be set to a non-None value if there is a single audio clip; in this case, it will load the requested number of seconds from this audio clip
         assert len(audio_files) == 1 or num_seconds is None
@@ -79,11 +77,10 @@ class BirdAudioDataset(Dataset):
         return signal
 
     def _crop_frequencies_if_necessary(self, signal):
-        if self.crop_frequencies:
-            if self.tight_crop:
-                signal = signal[:, 128:192]
-            else:
-                signal = signal[:, 64:]
+        if self.crop_mode == "third_quarter":
+            signal = signal[:, 128:192]
+        elif self.crop_mode == "second_half":
+            signal = signal[:, 64:]
         return signal
 
     def _get_signal_index_and_offset(self, start_sample):

@@ -1,4 +1,5 @@
 import torch
+from datetime import datetime
 from pathlib import Path
 import os
 import argparse
@@ -7,7 +8,6 @@ from torch.utils.data import DataLoader
 from torch.distributed import all_gather
 from torch.distributed import get_world_size
 import torchaudio
-from ae_settings import *
 from ae_model import CNNAutoencoder
 from distributed import init_distributed_mode
 
@@ -47,7 +47,7 @@ def get_arguments():
     )
 
     # Running
-    parser.add_argument("--num-workers", type=int, default=1)
+    parser.add_argument("--num-workers", type=int, default=10)
     parser.add_argument(
         "--device", default="cuda", help="device to use for training / testing"
     )
@@ -60,6 +60,28 @@ def get_arguments():
     parser.add_argument(
         "--dist-url", default="env://", help="url used to set up distributed training"
     )
+
+    # Pruning
+    parser.add_argument("--prune-anomalies", action='store_true')
+    parser.add_argument("--prune-frequency", default=50, type=int)
+
+    # Spectrogram Cropping
+    parser.add_argument("--crop-mode", choices=['none', 'second_half', 'third_quarter'], default='third_quarter')
+
+    # Audio Files
+    parser.add_argument("--audio-path", type=Path, default="/grand/projects/BirdAudio/Morton_Arboretum/audio/set3/00004879")
+    parser.add_argument("--single-file", type=Path)
+    parser.add_argument("--audio-file-cap", type=int, default=15)
+    
+    # Sampling
+    parser.add_argument("--num-samples", type=int, default=22050)
+    parser.add_argument("--sample-rate", type=int, default=22050)
+
+    # Logging
+    parser.add_argument("--log-frequency", type=int, default=10)
+
+    # Model
+    parser.add_argument("--bottleneck-dim", type=int, default=10)
 
     return parser
 
@@ -77,7 +99,7 @@ def get_all_audio_files(audio_path, audio_file_cap):
     return audio_files
 
 
-def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu):
+def train_one_epoch(args, model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu):
     for i, (inputs, _) in enumerate(data_loader, start=epoch * len(data_loader)):
         inputs = inputs.cuda(gpu, non_blocking=True)
         recons, _ = model(inputs)
@@ -85,7 +107,9 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, write
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        writer.add_scalar("Loss", loss.item(), i)
+        writer.add_scalar("Loss", loss.item())
+    if (epoch + 1) % args.log_frequency == 0:
+        print("Loss: ", loss.item())
     if args.rank == 0:
         state = dict(
             epoch=epoch + 1,
@@ -96,6 +120,7 @@ def train_one_epoch(model, data_loader, loss_fn, optimizer, device, epoch, write
 
 
 def train(
+    args,
     model,
     bad,
     data_loader,
@@ -108,14 +133,15 @@ def train(
     writer,
     gpu,
 ):
+    start_time = datetime.now()
     for epoch in range(start_epoch, epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
-        if PRUNE_ANOMALIES and (epoch + 1) % PRUNE_FREQUENCY == 0:
+        print(f"Epoch:  {epoch + 1}/{epochs}, Time: {datetime.now() - start_time}")
+        if args.prune_anomalies and (epoch + 1) % args.prune_frequency == 0:
             print("Pruning anomalies!")
             normal_indices = prune_anomalies(model, bad, prune_data_loader, loss_fn, gpu)
-            data_loader, prune_data_loader = get_data_loaders(bad, normal_indices)
+            data_loader, prune_data_loader = get_data_loaders(args, bad, normal_indices)
         train_one_epoch(
-            model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu
+            args, model, data_loader, loss_fn, optimizer, device, epoch, writer, gpu
         )
     print("Training is done.")
     if args.rank == 0:
@@ -170,28 +196,34 @@ def main(args):
         args.exp_dir.mkdir(parents=True, exist_ok=True)
 
     mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-        sample_rate=SAMPLE_RATE,
+        sample_rate=args.sample_rate,
         n_fft=1024,
         hop_length=512,
-        n_mels=((256 if TIGHT_CROP_MODE else 128) if CROPPED_MODE else 64),
+        n_mels=((256 if args.crop_mode == "third_quarter" else (128 if args.crop_mode == "second_half" else 64)))
     )
 
-    audio_files = get_all_audio_files(AUDIO_PATH, AUDIO_FILE_CAP)
-    print(f"Using {len(audio_files)} audio file(s)")
+    if args.single_file is not None:
+        audio_files = [args.single_file]
+        print(f"Loading single audio file: ", args. single_file)
+
+    else:
+        audio_files = get_all_audio_files(args.audio_path, args.audio_file_cap)
+        print(f"Loading {len(audio_files)} audio file(s):")
+        for audio_file in audio_files:
+            print(audio_file)
 
     bad = BirdAudioDataset(
         audio_files,
         mel_spectrogram,
-        SAMPLE_RATE,
-        NUM_SAMPLES,
+        args.sample_rate,
+        args.num_samples,
         gpu,
-        crop_frequencies=CROPPED_MODE,
-        tight_crop=TIGHT_CROP_MODE,
+        crop_mode=args.crop_mode
     )
 
-    train_data_loader, prune_data_loader = get_data_loaders(bad, range(len(bad)))
+    train_data_loader, prune_data_loader = get_data_loaders(args, bad, range(len(bad)))
 
-    model = CNNAutoencoder().cuda(gpu)
+    model = CNNAutoencoder(bottleneck_dim=args.bottleneck_dim).cuda(gpu)
     if torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs")
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
@@ -209,11 +241,12 @@ def main(args):
     else:
         start_epoch = 0
 
-    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_dim10_files{AUDIO_FILE_CAP}_{'tight' if TIGHT_CROP_MODE else 'std'}_{'prune' if PRUNE_ANOMALIES else 'noprune'}_epochs{args.epochs}"
+    log_dir = f"theta_run_birds/lr{args.lr}_wd{args.wd}_bs{args.batch_size}_epochs{args.epochs}"
     writer = SummaryWriter(log_dir)
     print(f"Tensorboard logging at {log_dir}")
 
     train(
+        args,
         model,
         bad,
         train_data_loader,
@@ -228,7 +261,7 @@ def main(args):
     )
 
 
-def get_data_loaders(bad, normal_indices):
+def get_data_loaders(args, bad, normal_indices):
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
 
