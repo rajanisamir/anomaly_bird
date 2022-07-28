@@ -78,7 +78,7 @@ def get_arguments():
     parser.add_argument("--sample-rate", type=int, default=22050)
 
     # Logging
-    parser.add_argument("--log-frequency", type=int, default=10)
+    parser.add_argument("--log-frequency", type=int, default=1)
 
     # Model
     parser.add_argument("--bottleneck-dim", type=int, default=10)
